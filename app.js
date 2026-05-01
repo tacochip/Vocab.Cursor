@@ -1,6 +1,7 @@
 const STORAGE_KEY = "vocab-study-words-v2";
 const LEGACY_STORAGE_KEY = "vocab-study-words-v1";
 const DICTIONARY_API_URL = "https://api.dictionaryapi.dev/api/v2/entries/en";
+const SPEECH_LANG = "en-US";
 
 const state = {
   words: [],
@@ -9,6 +10,10 @@ const state = {
   lookingUpDefinition: false,
   availableDefinitions: [],
   lookupRequestId: 0,
+  speechRecognitionSupported: false,
+  isRecording: false,
+  speechTarget: null,
+  assistantBusy: false,
   flashcards: {
     order: [],
     index: 0,
@@ -41,6 +46,13 @@ const elements = {
   lookupStatus: document.getElementById("lookup-status"),
   saveWordBtn: document.getElementById("save-word-btn"),
   cancelEditBtn: document.getElementById("cancel-edit-btn"),
+  assistantSupportStatus: document.getElementById("assistant-support-status"),
+  assistantWordInput: document.getElementById("assistant-word-input"),
+  assistantPhraseInput: document.getElementById("assistant-phrase-input"),
+  recordWordBtn: document.getElementById("record-word-btn"),
+  recordPhraseBtn: document.getElementById("record-phrase-btn"),
+  assistantAddBtn: document.getElementById("assistant-add-btn"),
+  assistantStatus: document.getElementById("assistant-status"),
   vocabList: document.getElementById("vocab-list"),
   vocabEmpty: document.getElementById("vocab-empty"),
   modeButtons: document.querySelectorAll(".mode-btn"),
@@ -56,6 +68,7 @@ const elements = {
   flashFlipBtn: document.getElementById("flash-flip-btn"),
   flashNextBtn: document.getElementById("flash-next-btn"),
   flashShuffleBtn: document.getElementById("flash-shuffle-btn"),
+  flashSpeakBtn: document.getElementById("flash-speak-btn"),
   quizStartBtn: document.getElementById("quiz-start-btn"),
   quizProgress: document.getElementById("quiz-progress"),
   quizQuestion: document.getElementById("quiz-question"),
@@ -66,6 +79,16 @@ const elements = {
   matchingStatus: document.getElementById("matching-status"),
   matchingBoard: document.getElementById("matching-board"),
 };
+
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speechRecognition = SpeechRecognitionCtor ? new SpeechRecognitionCtor() : null;
+
+if (speechRecognition) {
+  speechRecognition.lang = SPEECH_LANG;
+  speechRecognition.maxAlternatives = 1;
+  speechRecognition.continuous = false;
+  speechRecognition.interimResults = false;
+}
 
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -86,6 +109,142 @@ function shuffle(array) {
     [clone[i], clone[j]] = [clone[j], clone[i]];
   }
   return clone;
+}
+
+function setAssistantStatus(message, isError = false) {
+  elements.assistantStatus.textContent = message;
+  elements.assistantStatus.classList.toggle("error", isError);
+  elements.assistantStatus.classList.toggle("success", !isError);
+}
+
+function setLookupStatus(message, isError = false) {
+  elements.lookupStatus.textContent = message;
+  elements.lookupStatus.classList.toggle("error", isError);
+}
+
+function setAssistantBusy(isBusy) {
+  state.assistantBusy = isBusy;
+  elements.assistantAddBtn.disabled = isBusy;
+  if (!state.isRecording) {
+    elements.recordWordBtn.disabled = isBusy || !state.speechRecognitionSupported;
+    elements.recordPhraseBtn.disabled = isBusy || !state.speechRecognitionSupported;
+  }
+}
+
+function stopRecordingState() {
+  state.isRecording = false;
+  state.speechTarget = null;
+  elements.recordWordBtn.disabled = state.assistantBusy || !state.speechRecognitionSupported;
+  elements.recordPhraseBtn.disabled = state.assistantBusy || !state.speechRecognitionSupported;
+  if (!state.assistantBusy) {
+    maybeAutoAddFromCapturedVoice();
+  }
+}
+
+function setRecordingState(target) {
+  state.isRecording = true;
+  state.speechTarget = target;
+  elements.recordWordBtn.disabled = target === "phrase";
+  elements.recordPhraseBtn.disabled = target === "word";
+}
+
+function extractKeywordFromPhrase(phrase, definitions) {
+  if (!phrase) return "";
+  const tokenSet = new Set(
+    normalizeLower(phrase)
+      .split(/[^a-z0-9']+/)
+      .filter((token) => token.length >= 3)
+  );
+  if (tokenSet.size === 0) return "";
+
+  let bestToken = "";
+  let bestScore = 0;
+  definitions.forEach((definition) => {
+    normalizeLower(definition)
+      .split(/[^a-z0-9']+/)
+      .forEach((token) => {
+        if (!tokenSet.has(token)) return;
+        const score = token.length;
+        if (score > bestScore) {
+          bestScore = score;
+          bestToken = token;
+        }
+      });
+  });
+  return bestToken;
+}
+
+function pickDefinitionWithContext(definitions, phrase) {
+  if (!Array.isArray(definitions) || definitions.length === 0) return "";
+  if (!phrase) return definitions[0];
+
+  const normalizedPhrase = normalizeLower(phrase);
+  const keyword = extractKeywordFromPhrase(phrase, definitions);
+  let best = definitions[0];
+  let bestScore = -1;
+
+  definitions.forEach((definition) => {
+    const normalizedDef = normalizeLower(definition);
+    let score = 0;
+    if (keyword && normalizedDef.includes(keyword)) score += 3;
+    if (normalizedDef.includes("in a way that")) score += 1;
+    if (normalizedPhrase.includes("as a") && normalizedDef.includes("person")) score += 1;
+    if (normalizedPhrase.includes("to ") && normalizedDef.includes("to ")) score += 1;
+    const lengthPenalty = Math.min(Math.abs(normalizedDef.length - 90) / 90, 1);
+    score += 1 - lengthPenalty;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = definition;
+    }
+  });
+  return best;
+}
+
+function speakText(text) {
+  const cleaned = normalizeInput(text || "");
+  if (!cleaned) return;
+  if (!("speechSynthesis" in window)) {
+    setAssistantStatus("Text-to-speech is not supported in this browser.", true);
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(cleaned);
+  utterance.lang = SPEECH_LANG;
+  window.speechSynthesis.speak(utterance);
+}
+
+function startSpeechCapture(target) {
+  if (!speechRecognition) {
+    setAssistantStatus("Speech recognition is not supported in this browser.", true);
+    return;
+  }
+  if (state.isRecording) {
+    try {
+      speechRecognition.stop();
+    } catch (err) {
+      // No-op; immediately restart below if needed.
+    }
+  }
+
+  setRecordingState(target);
+  setAssistantStatus(target === "word" ? "Listening for a vocabulary word..." : "Listening for a phrase...");
+
+  try {
+    speechRecognition.start();
+  } catch (err) {
+    stopRecordingState();
+    setAssistantStatus("Could not start microphone capture. Try again.", true);
+  }
+}
+
+function maybeAutoAddFromCapturedVoice() {
+  if (state.assistantBusy) return;
+  const word = normalizeInput(elements.assistantWordInput.value);
+  const phrase = normalizeInput(elements.assistantPhraseInput.value);
+  if (!word || !phrase) return;
+  setAssistantStatus("Captured word and phrase. Auto-adding with AI assistant...");
+  aiAddFromVoice();
 }
 
 function saveWords() {
@@ -178,8 +337,15 @@ function renderVocabList() {
     deleteBtn.textContent = "Delete";
     deleteBtn.addEventListener("click", () => deleteWord(entry.id));
 
+    const speakBtn = document.createElement("button");
+    speakBtn.type = "button";
+    speakBtn.className = "secondary";
+    speakBtn.textContent = "Speak";
+    speakBtn.addEventListener("click", () => speakText(entry.word));
+
     actions.appendChild(editBtn);
     actions.appendChild(deleteBtn);
+    actions.appendChild(speakBtn);
 
     item.appendChild(content);
     item.appendChild(actions);
@@ -198,8 +364,7 @@ function clearForm() {
   elements.wordInput.value = "";
   elements.definitionOptions.innerHTML = "";
   elements.definitionPicker.classList.add("hidden");
-  elements.lookupStatus.textContent = "Type a word to fetch definitions automatically.";
-  elements.lookupStatus.classList.remove("error");
+  setLookupStatus("Type a word to fetch definitions automatically.");
   elements.saveWordBtn.textContent = "Define and Save";
   elements.saveWordBtn.disabled = false;
   elements.saveSelectedDefinitionBtn.disabled = true;
@@ -218,8 +383,7 @@ function startEditing(id) {
   elements.wordInput.value = entry.word;
   renderDefinitionOptions();
   elements.definitionPicker.classList.remove("hidden");
-  elements.lookupStatus.textContent = "Current saved definition selected.";
-  elements.lookupStatus.classList.remove("error");
+  setLookupStatus("Current saved definition selected.");
   elements.saveWordBtn.textContent = "Save Changes";
   elements.cancelEditBtn.classList.remove("hidden");
   elements.wordInput.focus();
@@ -334,16 +498,14 @@ async function lookupDefinitions() {
   if (state.lookingUpDefinition) return;
   const word = normalizeInput(elements.wordInput.value);
   if (!word) {
-    elements.lookupStatus.textContent = "Enter a word first.";
-    elements.lookupStatus.classList.add("error");
+    setLookupStatus("Enter a word first.", true);
     return;
   }
 
   const lookupId = state.lookupRequestId + 1;
   state.lookupRequestId = lookupId;
   setLookupInProgress(true);
-  elements.lookupStatus.textContent = "Looking up definitions...";
-  elements.lookupStatus.classList.remove("error");
+  setLookupStatus("Looking up definitions...");
   elements.definitionPicker.classList.add("hidden");
 
   try {
@@ -353,8 +515,7 @@ async function lookupDefinitions() {
     if (definitions.length === 0) {
       state.availableDefinitions = [];
       elements.definitionOptions.innerHTML = "";
-      elements.lookupStatus.textContent = "No definitions found. Try another word.";
-      elements.lookupStatus.classList.add("error");
+      setLookupStatus("No definitions found. Try another word.", true);
       updateSaveControls();
       return;
     }
@@ -362,18 +523,16 @@ async function lookupDefinitions() {
     state.availableDefinitions = definitions;
     renderDefinitionOptions();
     elements.definitionPicker.classList.remove("hidden");
-    elements.lookupStatus.textContent =
+    setLookupStatus(
       definitions.length === 1
         ? "1 definition found and selected."
-        : `${definitions.length} definitions found. Choose the best one.`;
-    elements.lookupStatus.classList.remove("error");
+        : `${definitions.length} definitions found. Choose the best one.`
+    );
   } catch (err) {
     if (lookupId !== state.lookupRequestId) return;
     state.availableDefinitions = [];
     elements.definitionOptions.innerHTML = "";
-    elements.lookupStatus.textContent =
-      "Could not look up definitions right now. Please check your connection and retry.";
-    elements.lookupStatus.classList.add("error");
+    setLookupStatus("Could not look up definitions right now. Please check your connection and retry.", true);
     updateSaveControls();
   } finally {
     if (lookupId === state.lookupRequestId) {
@@ -387,11 +546,10 @@ function handleWordInputChange() {
   state.availableDefinitions = [];
   elements.definitionOptions.innerHTML = "";
   elements.definitionPicker.classList.add("hidden");
-  elements.lookupStatus.textContent = "Looking up definitions...";
-  elements.lookupStatus.classList.remove("error");
+  setLookupStatus("Looking up definitions...");
   const currentWord = normalizeInput(elements.wordInput.value);
   if (!currentWord) {
-    elements.lookupStatus.textContent = "Type a word to fetch definitions automatically.";
+    setLookupStatus("Type a word to fetch definitions automatically.");
     updateSaveControls();
     return;
   }
@@ -407,11 +565,46 @@ function saveSelectedDefinition() {
   const word = normalizeInput(elements.wordInput.value);
   const definition = getSelectedDefinition();
   if (!word || !definition) {
-    elements.lookupStatus.textContent = "Select one of the fetched definitions before saving.";
-    elements.lookupStatus.classList.add("error");
+    setLookupStatus("Select one of the fetched definitions before saving.", true);
     return;
   }
   upsertWord(word, definition);
+}
+
+async function aiAddFromVoice() {
+  if (state.assistantBusy) return;
+  const word = normalizeInput(elements.assistantWordInput.value);
+  const phrase = normalizeInput(elements.assistantPhraseInput.value);
+  if (!word) {
+    setAssistantStatus("Add or speak a word first.", true);
+    return;
+  }
+  if (!phrase) {
+    setAssistantStatus("Add or speak a phrase using the word.", true);
+    return;
+  }
+
+  setAssistantBusy(true);
+  setAssistantStatus(`Finding definitions for "${word}" and picking the best match...`);
+  try {
+    const definitions = await fetchDefinitionsForWord(word);
+    if (definitions.length === 0) {
+      setAssistantStatus("No definitions found. Use the manual picker as fallback.", true);
+      return;
+    }
+    const selectedDefinition = pickDefinitionWithContext(definitions, phrase);
+    upsertWord(word, selectedDefinition);
+    setAssistantStatus(`Added "${word}" with an AI-selected definition.`);
+    elements.assistantWordInput.value = "";
+    elements.assistantPhraseInput.value = "";
+  } catch (err) {
+    setAssistantStatus(
+      "AI-assisted add failed due to lookup/network issue. Use manual add as fallback.",
+      true
+    );
+  } finally {
+    setAssistantBusy(false);
+  }
 }
 
 function handleFormSubmit(event) {
@@ -446,6 +639,7 @@ function renderFlashcards() {
     elements.flashcardText.textContent = "Add words to start studying.";
     elements.flashcardSideLabel.textContent = "";
     elements.flashcard.classList.remove("definition-side");
+    elements.flashSpeakBtn.disabled = true;
     return;
   }
 
@@ -453,6 +647,7 @@ function renderFlashcards() {
   elements.flashcardText.textContent = showingDefinition ? entry.definition : entry.word;
   elements.flashcardSideLabel.textContent = showingDefinition ? "Definition side" : "Word side";
   elements.flashcard.classList.toggle("definition-side", showingDefinition);
+  elements.flashSpeakBtn.disabled = false;
 }
 
 function flashNext() {
@@ -481,6 +676,12 @@ function flashShuffle() {
   state.flashcards.index = 0;
   state.flashcards.showingDefinition = false;
   renderFlashcards();
+}
+
+function flashSpeak() {
+  const entry = getCurrentFlashcardEntry();
+  if (!entry) return;
+  speakText(entry.word);
 }
 
 function startQuiz() {
@@ -762,6 +963,9 @@ function wireEvents() {
   elements.cancelEditBtn.addEventListener("click", clearForm);
   elements.saveSelectedDefinitionBtn.addEventListener("click", saveSelectedDefinition);
   elements.wordInput.addEventListener("input", handleWordInputChange);
+  elements.recordWordBtn.addEventListener("click", () => startSpeechCapture("word"));
+  elements.recordPhraseBtn.addEventListener("click", () => startSpeechCapture("phrase"));
+  elements.assistantAddBtn.addEventListener("click", aiAddFromVoice);
 
   elements.modeButtons.forEach((button) => {
     button.addEventListener("click", () => setMode(button.dataset.mode));
@@ -771,6 +975,7 @@ function wireEvents() {
   elements.flashNextBtn.addEventListener("click", flashNext);
   elements.flashFlipBtn.addEventListener("click", flashFlip);
   elements.flashShuffleBtn.addEventListener("click", flashShuffle);
+  elements.flashSpeakBtn.addEventListener("click", flashSpeak);
 
   elements.quizStartBtn.addEventListener("click", startQuiz);
   elements.quizNextBtn.addEventListener("click", nextQuizQuestion);
@@ -779,11 +984,52 @@ function wireEvents() {
 }
 
 function init() {
+  state.speechRecognitionSupported = !!speechRecognition;
+  if (!state.speechRecognitionSupported) {
+    elements.recordWordBtn.disabled = true;
+    elements.recordPhraseBtn.disabled = true;
+    elements.assistantSupportStatus.textContent =
+      "Voice capture is unavailable in this browser. You can still type word + phrase.";
+  }
+  setAssistantBusy(false);
+
+  if (speechRecognition) {
+    speechRecognition.onresult = (event) => {
+      const transcript = normalizeInput(event.results?.[0]?.[0]?.transcript || "");
+      if (!transcript) {
+        setAssistantStatus("I did not catch that. Please try speaking again.", true);
+        return;
+      }
+
+      if (state.speechTarget === "word") {
+        const spokenWord = transcript.split(/\s+/)[0] || transcript;
+        elements.assistantWordInput.value = spokenWord;
+        elements.wordInput.value = spokenWord;
+        handleWordInputChange();
+        setAssistantStatus(`Captured word: "${spokenWord}"`);
+        maybeAutoAddFromCapturedVoice();
+      } else if (state.speechTarget === "phrase") {
+        elements.assistantPhraseInput.value = transcript;
+        setAssistantStatus("Captured phrase.");
+        maybeAutoAddFromCapturedVoice();
+      }
+    };
+
+    speechRecognition.onerror = () => {
+      setAssistantStatus("Voice capture failed. Please retry or type manually.", true);
+    };
+
+    speechRecognition.onend = () => {
+      stopRecordingState();
+    };
+  }
+
   loadWords();
   resetFlashcards();
   wireEvents();
   setMode("flashcards");
   clearForm();
+  elements.flashSpeakBtn.disabled = true;
   renderAll();
 }
 
