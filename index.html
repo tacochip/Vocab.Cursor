@@ -40,6 +40,35 @@
           </div>
         </form>
 
+        <section class="assistant-panel">
+          <h3>AI Voice Assistant</h3>
+          <p id="assistant-support-status" class="subtle-text">
+            Speak a word and a phrase, then auto-add it with an AI-assisted definition choice.
+          </p>
+
+          <label for="assistant-word-input">Word (voice or type)</label>
+          <div class="assistant-inline">
+            <input id="assistant-word-input" type="text" maxlength="80" placeholder="e.g. meticulous" />
+            <button id="record-word-btn" type="button" class="secondary">Speak Word</button>
+          </div>
+
+          <label for="assistant-phrase-input">Phrase using the word</label>
+          <textarea
+            id="assistant-phrase-input"
+            rows="3"
+            maxlength="240"
+            placeholder="e.g. She was meticulous in checking every detail."
+          ></textarea>
+
+          <div class="assistant-actions">
+            <button id="record-phrase-btn" type="button" class="secondary">Speak Phrase</button>
+            <button id="assistant-add-btn" type="button">AI Add From Voice</button>
+          </div>
+          <p id="assistant-status" class="subtle-text assistant-status">
+            Tip: You can type in these fields if voice capture is not available.
+          </p>
+        </section>
+
         <div id="vocab-empty" class="empty-state">
           No words yet. Add your first word to get started.
         </div>
@@ -66,6 +95,7 @@
             <button id="flash-flip-btn">Flip</button>
             <button id="flash-next-btn" class="secondary">Next</button>
             <button id="flash-shuffle-btn" class="secondary">Shuffle</button>
+            <button id="flash-speak-btn" class="secondary">Speak Word</button>
           </div>
         </section>
 
