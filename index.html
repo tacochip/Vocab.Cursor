@@ -22,17 +22,18 @@
           <label for="word-input">Word</label>
           <input id="word-input" name="word" type="text" maxlength="80" required />
 
-          <label for="definition-input">Definition</label>
-          <textarea
-            id="definition-input"
-            name="definition"
-            rows="3"
-            maxlength="300"
-            required
-          ></textarea>
+          <p id="lookup-status" class="subtle-text lookup-status">
+            Enter a word and the app will look up definitions automatically.
+          </p>
+
+          <div id="definition-picker" class="definition-picker hidden">
+            <p class="definition-picker-label">Choose the definition that fits best:</p>
+            <div id="definition-options" class="definition-options"></div>
+            <button id="save-selected-definition-btn" type="button">Save Selected Definition</button>
+          </div>
 
           <div class="form-actions">
-            <button id="save-word-btn" type="submit">Add Word</button>
+            <button id="save-word-btn" type="submit">Define and Save</button>
             <button id="cancel-edit-btn" type="button" class="secondary hidden">
               Cancel Edit
             </button>
