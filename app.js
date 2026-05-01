@@ -1,9 +1,14 @@
-const STORAGE_KEY = "vocab-study-words-v1";
+const STORAGE_KEY = "vocab-study-words-v2";
+const LEGACY_STORAGE_KEY = "vocab-study-words-v1";
+const DICTIONARY_API_URL = "https://api.dictionaryapi.dev/api/v2/entries/en";
 
 const state = {
   words: [],
   currentMode: "flashcards",
   editingId: null,
+  lookingUpDefinition: false,
+  availableDefinitions: [],
+  lookupRequestId: 0,
   flashcards: {
     order: [],
     index: 0,
@@ -30,7 +35,10 @@ const elements = {
   form: document.getElementById("vocab-form"),
   editingIdInput: document.getElementById("editing-id"),
   wordInput: document.getElementById("word-input"),
-  definitionInput: document.getElementById("definition-input"),
+  definitionPicker: document.getElementById("definition-picker"),
+  definitionOptions: document.getElementById("definition-options"),
+  saveSelectedDefinitionBtn: document.getElementById("save-selected-definition-btn"),
+  lookupStatus: document.getElementById("lookup-status"),
   saveWordBtn: document.getElementById("save-word-btn"),
   cancelEditBtn: document.getElementById("cancel-edit-btn"),
   vocabList: document.getElementById("vocab-list"),
@@ -67,6 +75,10 @@ function normalizeInput(value) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function normalizeLower(value) {
+  return normalizeInput(value).toLowerCase();
+}
+
 function shuffle(array) {
   const clone = [...array];
   for (let i = clone.length - 1; i > 0; i -= 1) {
@@ -81,7 +93,7 @@ function saveWords() {
 }
 
 function loadWords() {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
   if (!raw) {
     state.words = [];
     return;
@@ -93,7 +105,8 @@ function loadWords() {
       state.words = [];
       return;
     }
-    state.words = parsed
+    const uniqueByWord = new Map();
+    parsed
       .filter(
         (item) =>
           item &&
@@ -101,11 +114,17 @@ function loadWords() {
           typeof item.word === "string" &&
           typeof item.definition === "string"
       )
-      .map((item) => ({
-        id: item.id,
-        word: normalizeInput(item.word),
-        definition: normalizeInput(item.definition),
-      }));
+      .forEach((item) => {
+        const normalizedWord = normalizeInput(item.word);
+        const normalizedDefinition = normalizeInput(item.definition);
+        if (!normalizedWord || !normalizedDefinition) return;
+        uniqueByWord.set(normalizeLower(normalizedWord), {
+          id: item.id,
+          word: normalizedWord,
+          definition: normalizedDefinition,
+        });
+      });
+    state.words = [...uniqueByWord.values()];
   } catch (err) {
     state.words = [];
   }
@@ -170,10 +189,20 @@ function renderVocabList() {
 
 function clearForm() {
   state.editingId = null;
+  state.availableDefinitions = [];
+  state.lookingUpDefinition = false;
+  state.lookupRequestId += 1;
+  window.clearTimeout(handleWordInputChange.lookupTimer);
   elements.editingIdInput.value = "";
+  elements.wordInput.disabled = false;
   elements.wordInput.value = "";
-  elements.definitionInput.value = "";
-  elements.saveWordBtn.textContent = "Add Word";
+  elements.definitionOptions.innerHTML = "";
+  elements.definitionPicker.classList.add("hidden");
+  elements.lookupStatus.textContent = "Type a word to fetch definitions automatically.";
+  elements.lookupStatus.classList.remove("error");
+  elements.saveWordBtn.textContent = "Define and Save";
+  elements.saveWordBtn.disabled = false;
+  elements.saveSelectedDefinitionBtn.disabled = true;
   elements.cancelEditBtn.classList.add("hidden");
 }
 
@@ -182,15 +211,27 @@ function startEditing(id) {
   if (!entry) return;
 
   state.editingId = id;
+  state.availableDefinitions = [entry.definition];
+  state.lookingUpDefinition = false;
+  state.lookupRequestId += 1;
   elements.editingIdInput.value = id;
   elements.wordInput.value = entry.word;
-  elements.definitionInput.value = entry.definition;
+  renderDefinitionOptions();
+  elements.definitionPicker.classList.remove("hidden");
+  elements.lookupStatus.textContent = "Current saved definition selected.";
+  elements.lookupStatus.classList.remove("error");
   elements.saveWordBtn.textContent = "Save Changes";
   elements.cancelEditBtn.classList.remove("hidden");
   elements.wordInput.focus();
 }
 
 function upsertWord(word, definition) {
+  const normalizedWordKey = normalizeLower(word);
+  const existingSameWord = state.words.find((item) => normalizeLower(item.word) === normalizedWordKey);
+  if (existingSameWord && existingSameWord.id !== state.editingId) {
+    state.editingId = existingSameWord.id;
+  }
+
   if (state.editingId) {
     const idx = state.words.findIndex((item) => item.id === state.editingId);
     if (idx !== -1) {
@@ -215,12 +256,171 @@ function deleteWord(id) {
   renderAll();
 }
 
+function renderDefinitionOptions() {
+  elements.definitionOptions.innerHTML = "";
+  state.availableDefinitions.forEach((definition, idx) => {
+    const option = document.createElement("label");
+    option.className = "definition-option";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "definition-choice";
+    radio.value = definition;
+    radio.required = true;
+    radio.checked = idx === 0;
+
+    const text = document.createElement("span");
+    text.textContent = definition;
+
+    option.appendChild(radio);
+    option.appendChild(text);
+    if (idx === 0) {
+      radio.checked = true;
+    }
+    elements.definitionOptions.appendChild(option);
+  });
+  updateSaveControls();
+}
+
+function getSelectedDefinition() {
+  const selected = elements.definitionOptions.querySelector('input[name="definition-choice"]:checked');
+  if (!selected || typeof selected.value !== "string") {
+    return "";
+  }
+  return normalizeInput(selected.value);
+}
+
+function updateSaveControls() {
+  const hasSelectedDefinition = !!getSelectedDefinition();
+  elements.saveSelectedDefinitionBtn.disabled = state.lookingUpDefinition || !hasSelectedDefinition;
+  elements.saveWordBtn.disabled = state.lookingUpDefinition;
+}
+
+function setLookupInProgress(inProgress) {
+  state.lookingUpDefinition = inProgress;
+  elements.wordInput.disabled = inProgress;
+  updateSaveControls();
+}
+
+async function fetchDefinitionsForWord(word) {
+  const response = await fetch(`${DICTIONARY_API_URL}/${encodeURIComponent(word)}`);
+  if (!response.ok) {
+    throw new Error("lookup_failed");
+  }
+
+  const payload = await response.json();
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const definitionSet = new Set();
+  payload.forEach((entry) => {
+    if (!entry || !Array.isArray(entry.meanings)) return;
+    entry.meanings.forEach((meaning) => {
+      if (!meaning || !Array.isArray(meaning.definitions)) return;
+      meaning.definitions.forEach((defObj) => {
+        if (!defObj || typeof defObj.definition !== "string") return;
+        const cleaned = normalizeInput(defObj.definition);
+        if (cleaned) {
+          definitionSet.add(cleaned);
+        }
+      });
+    });
+  });
+
+  return [...definitionSet];
+}
+
+async function lookupDefinitions() {
+  if (state.lookingUpDefinition) return;
+  const word = normalizeInput(elements.wordInput.value);
+  if (!word) {
+    elements.lookupStatus.textContent = "Enter a word first.";
+    elements.lookupStatus.classList.add("error");
+    return;
+  }
+
+  const lookupId = state.lookupRequestId + 1;
+  state.lookupRequestId = lookupId;
+  setLookupInProgress(true);
+  elements.lookupStatus.textContent = "Looking up definitions...";
+  elements.lookupStatus.classList.remove("error");
+  elements.definitionPicker.classList.add("hidden");
+
+  try {
+    const definitions = await fetchDefinitionsForWord(word);
+    if (lookupId !== state.lookupRequestId) return;
+
+    if (definitions.length === 0) {
+      state.availableDefinitions = [];
+      elements.definitionOptions.innerHTML = "";
+      elements.lookupStatus.textContent = "No definitions found. Try another word.";
+      elements.lookupStatus.classList.add("error");
+      updateSaveControls();
+      return;
+    }
+
+    state.availableDefinitions = definitions;
+    renderDefinitionOptions();
+    elements.definitionPicker.classList.remove("hidden");
+    elements.lookupStatus.textContent =
+      definitions.length === 1
+        ? "1 definition found and selected."
+        : `${definitions.length} definitions found. Choose the best one.`;
+    elements.lookupStatus.classList.remove("error");
+  } catch (err) {
+    if (lookupId !== state.lookupRequestId) return;
+    state.availableDefinitions = [];
+    elements.definitionOptions.innerHTML = "";
+    elements.lookupStatus.textContent =
+      "Could not look up definitions right now. Please check your connection and retry.";
+    elements.lookupStatus.classList.add("error");
+    updateSaveControls();
+  } finally {
+    if (lookupId === state.lookupRequestId) {
+      setLookupInProgress(false);
+    }
+  }
+}
+
+function handleWordInputChange() {
+  state.lookupRequestId += 1;
+  state.availableDefinitions = [];
+  elements.definitionOptions.innerHTML = "";
+  elements.definitionPicker.classList.add("hidden");
+  elements.lookupStatus.textContent = "Looking up definitions...";
+  elements.lookupStatus.classList.remove("error");
+  const currentWord = normalizeInput(elements.wordInput.value);
+  if (!currentWord) {
+    elements.lookupStatus.textContent = "Type a word to fetch definitions automatically.";
+    updateSaveControls();
+    return;
+  }
+  updateSaveControls();
+  window.clearTimeout(handleWordInputChange.lookupTimer);
+  handleWordInputChange.lookupTimer = window.setTimeout(() => {
+    lookupDefinitions();
+  }, 400);
+}
+handleWordInputChange.lookupTimer = null;
+
+function saveSelectedDefinition() {
+  const word = normalizeInput(elements.wordInput.value);
+  const definition = getSelectedDefinition();
+  if (!word || !definition) {
+    elements.lookupStatus.textContent = "Select one of the fetched definitions before saving.";
+    elements.lookupStatus.classList.add("error");
+    return;
+  }
+  upsertWord(word, definition);
+}
+
 function handleFormSubmit(event) {
   event.preventDefault();
-  const word = normalizeInput(elements.wordInput.value);
-  const definition = normalizeInput(elements.definitionInput.value);
-  if (!word || !definition) return;
-  upsertWord(word, definition);
+  if (!getSelectedDefinition()) {
+    lookupDefinitions();
+    return;
+  }
+  saveSelectedDefinition();
 }
 
 function setMode(mode) {
@@ -560,6 +760,8 @@ function renderAll() {
 function wireEvents() {
   elements.form.addEventListener("submit", handleFormSubmit);
   elements.cancelEditBtn.addEventListener("click", clearForm);
+  elements.saveSelectedDefinitionBtn.addEventListener("click", saveSelectedDefinition);
+  elements.wordInput.addEventListener("input", handleWordInputChange);
 
   elements.modeButtons.forEach((button) => {
     button.addEventListener("click", () => setMode(button.dataset.mode));
@@ -581,6 +783,7 @@ function init() {
   resetFlashcards();
   wireEvents();
   setMode("flashcards");
+  clearForm();
   renderAll();
 }
 
