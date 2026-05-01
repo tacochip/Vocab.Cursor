@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vocab Study MVP</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Vocabulary Study</h1>
+      <p>Build your list, then study with flashcards, quiz, and matching.</p>
+    </header>
+
+    <main class="layout">
+      <section class="panel vocab-panel">
+        <h2>Your Vocabulary</h2>
+
+        <form id="vocab-form" class="vocab-form">
+          <input type="hidden" id="editing-id" />
+
+          <label for="word-input">Word</label>
+          <input id="word-input" name="word" type="text" maxlength="80" required />
+
+          <label for="definition-input">Definition</label>
+          <textarea
+            id="definition-input"
+            name="definition"
+            rows="3"
+            maxlength="300"
+            required
+          ></textarea>
+
+          <div class="form-actions">
+            <button id="save-word-btn" type="submit">Add Word</button>
+            <button id="cancel-edit-btn" type="button" class="secondary hidden">
+              Cancel Edit
+            </button>
+          </div>
+        </form>
+
+        <div id="vocab-empty" class="empty-state">
+          No words yet. Add your first word to get started.
+        </div>
+        <ul id="vocab-list" class="vocab-list"></ul>
+      </section>
+
+      <section class="panel study-panel">
+        <h2>Study Modes</h2>
+
+        <div class="mode-switcher">
+          <button class="mode-btn active" data-mode="flashcards">Flashcards</button>
+          <button class="mode-btn" data-mode="quiz">Multiple Choice Quiz</button>
+          <button class="mode-btn" data-mode="matching">Matching Game</button>
+        </div>
+
+        <section id="mode-flashcards" class="mode-section">
+          <h3>Flashcards</h3>
+          <div id="flashcard" class="flashcard">
+            <p id="flashcard-text">Add words to start studying.</p>
+            <small id="flashcard-side-label"></small>
+          </div>
+          <div class="mode-actions">
+            <button id="flash-prev-btn" class="secondary">Previous</button>
+            <button id="flash-flip-btn">Flip</button>
+            <button id="flash-next-btn" class="secondary">Next</button>
+            <button id="flash-shuffle-btn" class="secondary">Shuffle</button>
+          </div>
+        </section>
+
+        <section id="mode-quiz" class="mode-section hidden">
+          <h3>Multiple Choice Quiz</h3>
+          <div class="mode-actions">
+            <button id="quiz-start-btn">Start Quiz</button>
+          </div>
+          <p id="quiz-progress" class="subtle-text"></p>
+          <p id="quiz-question" class="question-text">
+            Add at least two words to begin the quiz.
+          </p>
+          <div id="quiz-options" class="quiz-options"></div>
+          <p id="quiz-feedback" class="feedback-text"></p>
+          <div class="mode-actions">
+            <button id="quiz-next-btn" class="secondary hidden">Next Question</button>
+          </div>
+        </section>
+
+        <section id="mode-matching" class="mode-section hidden">
+          <h3>Matching Game</h3>
+          <div class="mode-actions">
+            <button id="matching-start-btn">Start Matching</button>
+          </div>
+          <p id="matching-status" class="subtle-text">
+            Add at least two words to play.
+          </p>
+          <div id="matching-board" class="matching-board"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
