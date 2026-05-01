@@ -41,6 +41,8 @@ const elements = {
   form: document.getElementById("vocab-form"),
   editingIdInput: document.getElementById("editing-id"),
   wordInput: document.getElementById("word-input"),
+  fallbackDefinitionInput: document.getElementById("manual-fallback-definition-input"),
+  saveManualFallbackBtn: document.getElementById("save-manual-definition-btn"),
   definitionPicker: document.getElementById("definition-picker"),
   definitionOptions: document.getElementById("definition-options"),
   manualDefinitionInput: document.getElementById("manual-definition-input"),
@@ -123,6 +125,16 @@ function setAssistantStatus(message, isError = false) {
 function setLookupStatus(message, isError = false) {
   elements.lookupStatus.textContent = message;
   elements.lookupStatus.classList.toggle("error", isError);
+}
+
+function updateManualFallbackControls() {
+  const hasWord = !!normalizeInput(elements.wordInput.value);
+  const hasManualDefinition = !!normalizeInput(elements.fallbackDefinitionInput.value);
+  elements.saveManualFallbackBtn.disabled = !hasWord || !hasManualDefinition || state.lookingUpDefinition;
+}
+
+function handleManualFallbackInput() {
+  updateManualFallbackControls();
 }
 
 function setAssistantBusy(isBusy) {
@@ -438,6 +450,7 @@ function clearForm() {
   elements.editingIdInput.value = "";
   elements.wordInput.disabled = false;
   elements.wordInput.value = "";
+  elements.fallbackDefinitionInput.value = "";
   elements.definitionOptions.innerHTML = "";
   elements.manualDefinitionInput.value = "";
   elements.resetManualDefinitionBtn.disabled = true;
@@ -445,6 +458,7 @@ function clearForm() {
   setLookupStatus("Type a word to fetch definitions automatically.");
   elements.saveWordBtn.textContent = "Define and Save";
   elements.saveWordBtn.disabled = false;
+  elements.saveManualFallbackBtn.disabled = true;
   elements.saveSelectedDefinitionBtn.disabled = true;
   elements.cancelEditBtn.classList.add("hidden");
 }
@@ -462,6 +476,7 @@ function startEditing(id) {
   state.lookupRequestId += 1;
   elements.editingIdInput.value = id;
   elements.wordInput.value = entry.word;
+  elements.fallbackDefinitionInput.value = currentDefinition;
   renderDefinitionOptions();
   const selectedRadio = elements.definitionOptions.querySelector(
     `input[name="definition-choice"][value="${escapeAttributeValue(defaultDefinition)}"]`
@@ -567,11 +582,13 @@ function updateSaveControls() {
   elements.saveSelectedDefinitionBtn.disabled = state.lookingUpDefinition || !hasEffectiveDefinition;
   elements.saveWordBtn.disabled = state.lookingUpDefinition;
   elements.resetManualDefinitionBtn.disabled = !getSelectedDefinition();
+  updateManualFallbackControls();
 }
 
 function setLookupInProgress(inProgress) {
   state.lookingUpDefinition = inProgress;
   elements.wordInput.disabled = inProgress;
+  elements.fallbackDefinitionInput.disabled = inProgress;
   updateSaveControls();
 }
 
@@ -661,6 +678,7 @@ function handleWordInputChange() {
   setLookupStatus("Looking up definitions...");
   const currentWord = normalizeInput(elements.wordInput.value);
   if (!currentWord) {
+    elements.fallbackDefinitionInput.value = "";
     setLookupStatus("Type a word to fetch definitions automatically.");
     updateSaveControls();
     return;
@@ -685,6 +703,17 @@ function saveSelectedDefinition() {
   if (definition !== defaultDefinition) {
     setLookupStatus("Saved custom definition. Use edit + reset anytime to restore default.");
   }
+}
+
+function saveManualFallbackDefinition() {
+  const word = normalizeInput(elements.wordInput.value);
+  const definition = normalizeInput(elements.fallbackDefinitionInput.value);
+  if (!word || !definition) {
+    setLookupStatus("Enter both a word and manual definition to save.", true);
+    return;
+  }
+  upsertWord(word, definition, definition);
+  setLookupStatus("Saved manual definition without lookup.");
 }
 
 async function aiAddFromVoice() {
@@ -1079,6 +1108,8 @@ function wireEvents() {
   elements.cancelEditBtn.addEventListener("click", clearForm);
   elements.saveSelectedDefinitionBtn.addEventListener("click", saveSelectedDefinition);
   elements.wordInput.addEventListener("input", handleWordInputChange);
+  elements.fallbackDefinitionInput.addEventListener("input", updateManualFallbackControls);
+  elements.saveManualFallbackBtn.addEventListener("click", saveManualFallbackDefinition);
   elements.definitionOptions.addEventListener("change", () => {
     syncManualDefinitionFromSelected();
     updateSaveControls();
@@ -1155,6 +1186,7 @@ function init() {
   wireEvents();
   setMode("flashcards");
   clearForm();
+  updateManualFallbackControls();
   elements.flashSpeakBtn.disabled = true;
   renderAll();
 }

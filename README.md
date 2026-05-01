@@ -8,6 +8,7 @@ A simple, ready-to-use web app for studying vocabulary in the browser.
 - Automatic word definition lookup via online dictionary API
 - If multiple definitions exist, pick the most appropriate one before saving
 - Manually edit any selected definition and reset back to default with one click
+- Manual fallback input allows saving a typed definition when lookup is unavailable
 - Voice assistant flow:
   - Speak a word
   - Speak a phrase using that word

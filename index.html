@@ -26,6 +26,17 @@
             Enter a word and the app will look up definitions automatically.
           </p>
 
+          <div class="manual-fallback">
+            <p>Fallback: save a custom definition without lookup.</p>
+            <label for="manual-fallback-definition-input">Manual definition fallback</label>
+            <textarea
+              id="manual-fallback-definition-input"
+              rows="3"
+              maxlength="320"
+              placeholder="If lookup fails, type your own definition here and save manually."
+            ></textarea>
+          </div>
+
           <div id="definition-picker" class="definition-picker hidden">
             <p class="definition-picker-label">Choose the definition that fits best:</p>
             <div id="definition-options" class="definition-options"></div>
@@ -46,6 +57,9 @@
 
           <div class="form-actions">
             <button id="save-word-btn" type="submit">Define and Save</button>
+            <button id="save-manual-definition-btn" type="button" class="secondary">
+              Save Manual Definition
+            </button>
             <button id="cancel-edit-btn" type="button" class="secondary hidden">
               Cancel Edit
             </button>
