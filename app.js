@@ -11,6 +11,7 @@ const state = {
   availableDefinitions: [],
   lookupRequestId: 0,
   speechRecognitionSupported: false,
+  microphoneGranted: false,
   isRecording: false,
   speechTarget: null,
   assistantBusy: false,
@@ -42,6 +43,8 @@ const elements = {
   wordInput: document.getElementById("word-input"),
   definitionPicker: document.getElementById("definition-picker"),
   definitionOptions: document.getElementById("definition-options"),
+  manualDefinitionInput: document.getElementById("manual-definition-input"),
+  resetManualDefinitionBtn: document.getElementById("reset-manual-definition-btn"),
   saveSelectedDefinitionBtn: document.getElementById("save-selected-definition-btn"),
   lookupStatus: document.getElementById("lookup-status"),
   saveWordBtn: document.getElementById("save-word-btn"),
@@ -148,6 +151,49 @@ function setRecordingState(target) {
   elements.recordPhraseBtn.disabled = target === "word";
 }
 
+async function refreshMicrophoneAvailability() {
+  if (!navigator.permissions || typeof navigator.permissions.query !== "function") {
+    return;
+  }
+  try {
+    const permission = await navigator.permissions.query({ name: "microphone" });
+    state.microphoneGranted = permission.state === "granted";
+    permission.onchange = () => {
+      state.microphoneGranted = permission.state === "granted";
+      setAssistantBusy(state.assistantBusy);
+    };
+  } catch (err) {
+    // Ignore unsupported permissions implementations.
+  }
+}
+
+function getEntryDefaultDefinition(entry) {
+  return normalizeInput(entry?.defaultDefinition || entry?.definition || "");
+}
+
+function escapeAttributeValue(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+function syncManualDefinitionFromSelected() {
+  const selected = getSelectedDefinition();
+  elements.manualDefinitionInput.value = selected;
+}
+
+function getEffectiveDefinition() {
+  const manual = normalizeInput(elements.manualDefinitionInput.value);
+  return manual || getSelectedDefinition();
+}
+
+function resetManualDefinitionToDefault() {
+  syncManualDefinitionFromSelected();
+  updateSaveControls();
+  setLookupStatus("Definition reset to selected default.");
+}
+
 function extractKeywordFromPhrase(phrase, definitions) {
   if (!phrase) return "";
   const tokenSet = new Set(
@@ -214,11 +260,39 @@ function speakText(text) {
   window.speechSynthesis.speak(utterance);
 }
 
-function startSpeechCapture(target) {
+async function ensureMicrophoneAccess() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    setAssistantStatus("This browser cannot access the microphone API.", true);
+    return false;
+  }
+  if (state.microphoneGranted) return true;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    state.microphoneGranted = true;
+    setAssistantBusy(state.assistantBusy);
+    setAssistantStatus("Microphone connected. You can now use voice capture.");
+    return true;
+  } catch (err) {
+    state.microphoneGranted = false;
+    setAssistantBusy(state.assistantBusy);
+    setAssistantStatus("Microphone permission denied. Use manual typing as fallback.", true);
+    return false;
+  }
+}
+
+async function startSpeechCapture(target) {
   if (!speechRecognition) {
     setAssistantStatus("Speech recognition is not supported in this browser.", true);
     return;
   }
+
+  const canUseMic = await ensureMicrophoneAccess();
+  if (!canUseMic) {
+    return;
+  }
+
   if (state.isRecording) {
     try {
       speechRecognition.stop();
@@ -276,11 +350,13 @@ function loadWords() {
       .forEach((item) => {
         const normalizedWord = normalizeInput(item.word);
         const normalizedDefinition = normalizeInput(item.definition);
+        const normalizedDefaultDefinition = normalizeInput(item.defaultDefinition || item.definition || "");
         if (!normalizedWord || !normalizedDefinition) return;
         uniqueByWord.set(normalizeLower(normalizedWord), {
           id: item.id,
           word: normalizedWord,
           definition: normalizedDefinition,
+          defaultDefinition: normalizedDefaultDefinition || normalizedDefinition,
         });
       });
     state.words = [...uniqueByWord.values()];
@@ -363,6 +439,8 @@ function clearForm() {
   elements.wordInput.disabled = false;
   elements.wordInput.value = "";
   elements.definitionOptions.innerHTML = "";
+  elements.manualDefinitionInput.value = "";
+  elements.resetManualDefinitionBtn.disabled = true;
   elements.definitionPicker.classList.add("hidden");
   setLookupStatus("Type a word to fetch definitions automatically.");
   elements.saveWordBtn.textContent = "Define and Save";
@@ -375,22 +453,42 @@ function startEditing(id) {
   const entry = state.words.find((item) => item.id === id);
   if (!entry) return;
 
+  const defaultDefinition = getEntryDefaultDefinition(entry);
+  const currentDefinition = normalizeInput(entry.definition);
+  state.availableDefinitions = [...new Set([defaultDefinition, currentDefinition].filter(Boolean))];
+
   state.editingId = id;
-  state.availableDefinitions = [entry.definition];
   state.lookingUpDefinition = false;
   state.lookupRequestId += 1;
   elements.editingIdInput.value = id;
   elements.wordInput.value = entry.word;
   renderDefinitionOptions();
+  const selectedRadio = elements.definitionOptions.querySelector(
+    `input[name="definition-choice"][value="${escapeAttributeValue(defaultDefinition)}"]`
+  );
+  if (selectedRadio) {
+    selectedRadio.checked = true;
+  }
+  elements.manualDefinitionInput.value = currentDefinition;
+  updateSaveControls();
   elements.definitionPicker.classList.remove("hidden");
-  setLookupStatus("Current saved definition selected.");
+  setLookupStatus(
+    currentDefinition === defaultDefinition
+      ? "Default definition selected. You can edit it manually if needed."
+      : "Custom definition loaded. Use Reset to return to default."
+  );
   elements.saveWordBtn.textContent = "Save Changes";
   elements.cancelEditBtn.classList.remove("hidden");
   elements.wordInput.focus();
 }
 
-function upsertWord(word, definition) {
-  const normalizedWordKey = normalizeLower(word);
+function upsertWord(word, definition, defaultDefinition = definition) {
+  const normalizedWord = normalizeInput(word);
+  const normalizedDefinition = normalizeInput(definition);
+  const normalizedDefault = normalizeInput(defaultDefinition) || normalizedDefinition;
+  if (!normalizedWord || !normalizedDefinition) return;
+
+  const normalizedWordKey = normalizeLower(normalizedWord);
   const existingSameWord = state.words.find((item) => normalizeLower(item.word) === normalizedWordKey);
   if (existingSameWord && existingSameWord.id !== state.editingId) {
     state.editingId = existingSameWord.id;
@@ -399,10 +497,20 @@ function upsertWord(word, definition) {
   if (state.editingId) {
     const idx = state.words.findIndex((item) => item.id === state.editingId);
     if (idx !== -1) {
-      state.words[idx] = { ...state.words[idx], word, definition };
+      state.words[idx] = {
+        ...state.words[idx],
+        word: normalizedWord,
+        definition: normalizedDefinition,
+        defaultDefinition: normalizedDefault,
+      };
     }
   } else {
-    state.words.push({ id: uid(), word, definition });
+    state.words.push({
+      id: uid(),
+      word: normalizedWord,
+      definition: normalizedDefinition,
+      defaultDefinition: normalizedDefault,
+    });
   }
   saveWords();
   clearForm();
@@ -442,6 +550,7 @@ function renderDefinitionOptions() {
     }
     elements.definitionOptions.appendChild(option);
   });
+  syncManualDefinitionFromSelected();
   updateSaveControls();
 }
 
@@ -454,9 +563,10 @@ function getSelectedDefinition() {
 }
 
 function updateSaveControls() {
-  const hasSelectedDefinition = !!getSelectedDefinition();
-  elements.saveSelectedDefinitionBtn.disabled = state.lookingUpDefinition || !hasSelectedDefinition;
+  const hasEffectiveDefinition = !!getEffectiveDefinition();
+  elements.saveSelectedDefinitionBtn.disabled = state.lookingUpDefinition || !hasEffectiveDefinition;
   elements.saveWordBtn.disabled = state.lookingUpDefinition;
+  elements.resetManualDefinitionBtn.disabled = !getSelectedDefinition();
 }
 
 function setLookupInProgress(inProgress) {
@@ -545,6 +655,8 @@ function handleWordInputChange() {
   state.lookupRequestId += 1;
   state.availableDefinitions = [];
   elements.definitionOptions.innerHTML = "";
+  elements.manualDefinitionInput.value = "";
+  elements.resetManualDefinitionBtn.disabled = true;
   elements.definitionPicker.classList.add("hidden");
   setLookupStatus("Looking up definitions...");
   const currentWord = normalizeInput(elements.wordInput.value);
@@ -563,12 +675,16 @@ handleWordInputChange.lookupTimer = null;
 
 function saveSelectedDefinition() {
   const word = normalizeInput(elements.wordInput.value);
-  const definition = getSelectedDefinition();
-  if (!word || !definition) {
+  const defaultDefinition = getSelectedDefinition();
+  const definition = getEffectiveDefinition();
+  if (!word || !defaultDefinition || !definition) {
     setLookupStatus("Select one of the fetched definitions before saving.", true);
     return;
   }
-  upsertWord(word, definition);
+  upsertWord(word, definition, defaultDefinition);
+  if (definition !== defaultDefinition) {
+    setLookupStatus("Saved custom definition. Use edit + reset anytime to restore default.");
+  }
 }
 
 async function aiAddFromVoice() {
@@ -963,6 +1079,12 @@ function wireEvents() {
   elements.cancelEditBtn.addEventListener("click", clearForm);
   elements.saveSelectedDefinitionBtn.addEventListener("click", saveSelectedDefinition);
   elements.wordInput.addEventListener("input", handleWordInputChange);
+  elements.definitionOptions.addEventListener("change", () => {
+    syncManualDefinitionFromSelected();
+    updateSaveControls();
+  });
+  elements.manualDefinitionInput.addEventListener("input", updateSaveControls);
+  elements.resetManualDefinitionBtn.addEventListener("click", resetManualDefinitionToDefault);
   elements.recordWordBtn.addEventListener("click", () => startSpeechCapture("word"));
   elements.recordPhraseBtn.addEventListener("click", () => startSpeechCapture("phrase"));
   elements.assistantAddBtn.addEventListener("click", aiAddFromVoice);
@@ -990,6 +1112,10 @@ function init() {
     elements.recordPhraseBtn.disabled = true;
     elements.assistantSupportStatus.textContent =
       "Voice capture is unavailable in this browser. You can still type word + phrase.";
+  } else {
+    elements.assistantSupportStatus.textContent =
+      "Voice capture requires microphone permission. Click Speak Word or Speak Phrase to grant access.";
+    refreshMicrophoneAvailability().finally(() => setAssistantBusy(state.assistantBusy));
   }
   setAssistantBusy(false);
 
