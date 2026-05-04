@@ -13,6 +13,11 @@ A simple, ready-to-use web app for studying vocabulary in the browser.
   - Speak a word
   - Speak a phrase using that word
   - Auto-add with an AI-assisted definition choice based on phrase context
+- Explicit browser capability handling for speech input:
+  - browser not supported
+  - speech recognition API unavailable (common on Firefox)
+  - microphone permission denied
+  - listening in progress / no speech detected
 - Text-to-speech pronunciation for vocabulary words (list + flashcards)
 - Manual word/definition selection flow remains available as fallback
 - Local persistence using `localStorage` (no backend required)
@@ -31,6 +36,7 @@ Open `index.html` in your browser.
 > - Definition lookup uses an online API, so an internet connection is required when adding/editing words.
 > - Voice input and pronunciation require browser support for Web Speech APIs.
 > - Voice capture requests real microphone permission (`getUserMedia`) before recording.
+> - Firefox may allow microphone access but still not support in-browser speech recognition; typing remains the fallback.
 
 For local static serving (optional):
 

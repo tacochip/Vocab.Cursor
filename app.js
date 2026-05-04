@@ -11,10 +11,15 @@ const state = {
   availableDefinitions: [],
   lookupRequestId: 0,
   speechRecognitionSupported: false,
+  microphoneApiSupported: false,
+  secureContextSupported: false,
   microphoneGranted: false,
+  microphonePermission: "unknown",
   isRecording: false,
   speechTarget: null,
   assistantBusy: false,
+  recognitionSessionHadResult: false,
+  recognitionSessionHadError: false,
   flashcards: {
     order: [],
     index: 0,
@@ -52,6 +57,7 @@ const elements = {
   saveWordBtn: document.getElementById("save-word-btn"),
   cancelEditBtn: document.getElementById("cancel-edit-btn"),
   assistantSupportStatus: document.getElementById("assistant-support-status"),
+  assistantCapabilityStatus: document.getElementById("assistant-capability-status"),
   assistantWordInput: document.getElementById("assistant-word-input"),
   assistantPhraseInput: document.getElementById("assistant-phrase-input"),
   recordWordBtn: document.getElementById("record-word-btn"),
@@ -116,15 +122,50 @@ function shuffle(array) {
   return clone;
 }
 
-function setAssistantStatus(message, isError = false) {
-  elements.assistantStatus.textContent = message;
-  elements.assistantStatus.classList.toggle("error", isError);
-  elements.assistantStatus.classList.toggle("success", !isError);
+function resolveStatusKind(kindOrError) {
+  if (typeof kindOrError === "boolean") {
+    return kindOrError ? "error" : "info";
+  }
+  if (kindOrError === "success" || kindOrError === "error" || kindOrError === "warn") {
+    return kindOrError;
+  }
+  return "info";
 }
 
-function setLookupStatus(message, isError = false) {
-  elements.lookupStatus.textContent = message;
-  elements.lookupStatus.classList.toggle("error", isError);
+function setStatusText(element, message, kindOrError = "info") {
+  if (!element) return;
+  const kind = resolveStatusKind(kindOrError);
+  const prefixes = {
+    success: "Success:",
+    error: "Error:",
+    warn: "Note:",
+    info: "",
+  };
+  const prefix = prefixes[kind];
+  const hasPrefix = prefix && message.startsWith(prefix);
+  element.textContent = hasPrefix || !prefix ? message : `${prefix} ${message}`;
+  element.classList.toggle("error", kind === "error");
+  element.classList.toggle("success", kind === "success");
+  element.classList.toggle("warn", kind === "warn");
+  element.classList.toggle("info", kind === "info");
+}
+
+function setCapabilityBadge(text, kind = "warn") {
+  if (!elements.assistantCapabilityStatus) return;
+  elements.assistantCapabilityStatus.textContent = text;
+  elements.assistantCapabilityStatus.className = `status-badge ${kind}`;
+}
+
+function setAssistantStatus(message, kindOrError = "info") {
+  setStatusText(elements.assistantStatus, message, kindOrError);
+}
+
+function setAssistantSupportStatus(message, kindOrError = "info") {
+  setStatusText(elements.assistantSupportStatus, message, kindOrError);
+}
+
+function setLookupStatus(message, kindOrError = "info") {
+  setStatusText(elements.lookupStatus, message, kindOrError);
 }
 
 function updateManualFallbackControls() {
@@ -137,21 +178,39 @@ function handleManualFallbackInput() {
   updateManualFallbackControls();
 }
 
+function canUseSpeechCapture() {
+  return (
+    state.speechRecognitionSupported &&
+    state.microphoneApiSupported &&
+    state.secureContextSupported &&
+    state.microphonePermission !== "denied"
+  );
+}
+
 function setAssistantBusy(isBusy) {
   state.assistantBusy = isBusy;
   elements.assistantAddBtn.disabled = isBusy;
   if (!state.isRecording) {
-    elements.recordWordBtn.disabled = isBusy || !state.speechRecognitionSupported;
-    elements.recordPhraseBtn.disabled = isBusy || !state.speechRecognitionSupported;
+    const disableCapture = isBusy || !canUseSpeechCapture();
+    elements.recordWordBtn.disabled = disableCapture;
+    elements.recordPhraseBtn.disabled = disableCapture;
   }
 }
 
 function stopRecordingState() {
+  const hadResult = state.recognitionSessionHadResult;
+  const hadError = state.recognitionSessionHadError;
   state.isRecording = false;
   state.speechTarget = null;
-  elements.recordWordBtn.disabled = state.assistantBusy || !state.speechRecognitionSupported;
-  elements.recordPhraseBtn.disabled = state.assistantBusy || !state.speechRecognitionSupported;
-  if (!state.assistantBusy) {
+  state.recognitionSessionHadResult = false;
+  state.recognitionSessionHadError = false;
+  const disableCapture = state.assistantBusy || !canUseSpeechCapture();
+  elements.recordWordBtn.disabled = disableCapture;
+  elements.recordPhraseBtn.disabled = disableCapture;
+  if (canUseSpeechCapture() && !hadResult && !hadError) {
+    setAssistantStatus("No speech detected. Please try again and speak clearly.", "warn");
+  }
+  if (!state.assistantBusy && hadResult) {
     maybeAutoAddFromCapturedVoice();
   }
 }
@@ -159,24 +218,79 @@ function stopRecordingState() {
 function setRecordingState(target) {
   state.isRecording = true;
   state.speechTarget = target;
+  state.recognitionSessionHadResult = false;
+  state.recognitionSessionHadError = false;
   elements.recordWordBtn.disabled = target === "phrase";
   elements.recordPhraseBtn.disabled = target === "word";
 }
 
 async function refreshMicrophoneAvailability() {
+  if (!state.microphoneApiSupported || !state.secureContextSupported) {
+    return;
+  }
   if (!navigator.permissions || typeof navigator.permissions.query !== "function") {
     return;
   }
   try {
     const permission = await navigator.permissions.query({ name: "microphone" });
     state.microphoneGranted = permission.state === "granted";
+    state.microphonePermission = permission.state;
     permission.onchange = () => {
       state.microphoneGranted = permission.state === "granted";
+      state.microphonePermission = permission.state;
       setAssistantBusy(state.assistantBusy);
+      refreshSpeechSupportUiMessage();
     };
   } catch (err) {
     // Ignore unsupported permissions implementations.
   }
+}
+
+function refreshSpeechSupportUiMessage() {
+  if (!state.speechRecognitionSupported && !state.microphoneApiSupported) {
+    setAssistantSupportStatus(
+      "This browser does not support required voice APIs. Type word + phrase manually instead.",
+      "warn"
+    );
+    setCapabilityBadge("Voice APIs unsupported", "warn");
+    return;
+  }
+  if (!state.speechRecognitionSupported) {
+    setAssistantSupportStatus(
+      "Speech recognition is not supported in this browser (common on Firefox). You can still type word + phrase.",
+      "warn"
+    );
+    setCapabilityBadge("Speech recognition unavailable", "warn");
+    return;
+  }
+  if (!state.microphoneApiSupported) {
+    setAssistantSupportStatus("Microphone access API is unavailable in this browser.", "warn");
+    setCapabilityBadge("Microphone API unavailable", "warn");
+    return;
+  }
+  if (!state.secureContextSupported) {
+    setAssistantSupportStatus("Voice capture needs HTTPS (or localhost) to access the microphone.", "warn");
+    setCapabilityBadge("Needs HTTPS or localhost", "warn");
+    return;
+  }
+  if (state.microphonePermission === "denied") {
+    setAssistantSupportStatus(
+      "Microphone permission is denied. Enable it in browser settings, then reload this page.",
+      "error"
+    );
+    setCapabilityBadge("Permission denied", "warn");
+    return;
+  }
+  if (state.microphonePermission === "granted") {
+    setAssistantSupportStatus("Voice capture is ready. Use Speak Word / Speak Phrase.", "success");
+    setCapabilityBadge("Voice capture ready", "ok");
+    return;
+  }
+  setAssistantSupportStatus(
+    "Voice capture is available. Click Speak Word or Speak Phrase to grant microphone permission.",
+    "info"
+  );
+  setCapabilityBadge("Permission required", "warn");
 }
 
 function getEntryDefaultDefinition(entry) {
@@ -273,8 +387,24 @@ function speakText(text) {
 }
 
 async function ensureMicrophoneAccess() {
-  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-    setAssistantStatus("This browser cannot access the microphone API.", true);
+  if (!state.microphoneApiSupported) {
+    setAssistantStatus("Microphone API is unavailable in this browser. Type manually instead.", "warn");
+    refreshSpeechSupportUiMessage();
+    return false;
+  }
+  if (!state.secureContextSupported) {
+    setAssistantStatus("Voice capture requires HTTPS or localhost.", "warn");
+    refreshSpeechSupportUiMessage();
+    return false;
+  }
+  if (!state.speechRecognitionSupported) {
+    setAssistantStatus("Speech recognition is not available here. Type manually instead.", "warn");
+    refreshSpeechSupportUiMessage();
+    return false;
+  }
+  if (state.microphonePermission === "denied") {
+    setAssistantStatus("Microphone permission is denied. Enable it in browser settings to continue.", "error");
+    refreshSpeechSupportUiMessage();
     return false;
   }
   if (state.microphoneGranted) return true;
@@ -283,20 +413,37 @@ async function ensureMicrophoneAccess() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((track) => track.stop());
     state.microphoneGranted = true;
+    state.microphonePermission = "granted";
     setAssistantBusy(state.assistantBusy);
+    refreshSpeechSupportUiMessage();
     setAssistantStatus("Microphone connected. You can now use voice capture.");
     return true;
   } catch (err) {
     state.microphoneGranted = false;
+    const errorName = err && typeof err.name === "string" ? err.name : "";
+    if (errorName === "NotAllowedError" || errorName === "SecurityError") {
+      state.microphonePermission = "denied";
+      setAssistantStatus("Microphone permission denied. Use manual typing as fallback.", "error");
+    } else if (errorName === "NotFoundError") {
+      setAssistantStatus("No microphone device was detected on this system.", "error");
+    } else if (errorName === "NotReadableError") {
+      setAssistantStatus("Microphone is busy or unavailable. Close other audio apps and retry.", "error");
+    } else {
+      setAssistantStatus("Microphone is unavailable right now. Please retry or type manually.", "warn");
+    }
     setAssistantBusy(state.assistantBusy);
-    setAssistantStatus("Microphone permission denied. Use manual typing as fallback.", true);
+    refreshSpeechSupportUiMessage();
     return false;
   }
 }
 
 async function startSpeechCapture(target) {
-  if (!speechRecognition) {
-    setAssistantStatus("Speech recognition is not supported in this browser.", true);
+  if (!state.speechRecognitionSupported) {
+    setAssistantStatus(
+      "Speech recognition is not supported in this browser (for example, Firefox). Type word + phrase instead.",
+      "warn"
+    );
+    refreshSpeechSupportUiMessage();
     return;
   }
 
@@ -314,13 +461,16 @@ async function startSpeechCapture(target) {
   }
 
   setRecordingState(target);
-  setAssistantStatus(target === "word" ? "Listening for a vocabulary word..." : "Listening for a phrase...");
+  setAssistantStatus(
+    target === "word" ? "Listening in progress: say one vocabulary word." : "Listening in progress: say a phrase.",
+    "info"
+  );
 
   try {
     speechRecognition.start();
   } catch (err) {
     stopRecordingState();
-    setAssistantStatus("Could not start microphone capture. Try again.", true);
+    setAssistantStatus("Could not start speech capture. Please retry or type manually.", "error");
   }
 }
 
@@ -1138,15 +1288,20 @@ function wireEvents() {
 
 function init() {
   state.speechRecognitionSupported = !!speechRecognition;
-  if (!state.speechRecognitionSupported) {
-    elements.recordWordBtn.disabled = true;
-    elements.recordPhraseBtn.disabled = true;
-    elements.assistantSupportStatus.textContent =
-      "Voice capture is unavailable in this browser. You can still type word + phrase.";
+  state.microphoneApiSupported =
+    !!navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function";
+  state.secureContextSupported =
+    window.isSecureContext ||
+    window.location.protocol === "file:" ||
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+  if (state.speechRecognitionSupported) {
+    refreshMicrophoneAvailability().finally(() => {
+      refreshSpeechSupportUiMessage();
+      setAssistantBusy(state.assistantBusy);
+    });
   } else {
-    elements.assistantSupportStatus.textContent =
-      "Voice capture requires microphone permission. Click Speak Word or Speak Phrase to grant access.";
-    refreshMicrophoneAvailability().finally(() => setAssistantBusy(state.assistantBusy));
+    refreshSpeechSupportUiMessage();
   }
   setAssistantBusy(false);
 
@@ -1154,9 +1309,11 @@ function init() {
     speechRecognition.onresult = (event) => {
       const transcript = normalizeInput(event.results?.[0]?.[0]?.transcript || "");
       if (!transcript) {
-        setAssistantStatus("I did not catch that. Please try speaking again.", true);
+        state.recognitionSessionHadError = true;
+        setAssistantStatus("No speech detected. Please try speaking again.", "warn");
         return;
       }
+      state.recognitionSessionHadResult = true;
 
       if (state.speechTarget === "word") {
         const spokenWord = transcript.split(/\s+/)[0] || transcript;
@@ -1172,8 +1329,37 @@ function init() {
       }
     };
 
-    speechRecognition.onerror = () => {
-      setAssistantStatus("Voice capture failed. Please retry or type manually.", true);
+    speechRecognition.onerror = (event) => {
+      state.recognitionSessionHadError = true;
+      const speechError = event?.error;
+      if (speechError === "aborted") {
+        setAssistantStatus("Listening stopped.", "info");
+        return;
+      }
+      if (speechError === "not-allowed" || speechError === "service-not-allowed") {
+        state.microphonePermission = "denied";
+        setAssistantStatus("Microphone permission denied. Enable access in browser settings.", "error");
+        refreshSpeechSupportUiMessage();
+        setAssistantBusy(state.assistantBusy);
+        return;
+      }
+      if (speechError === "audio-capture") {
+        setAssistantStatus("No microphone was found or it is currently unavailable.", "error");
+        return;
+      }
+      if (speechError === "no-speech") {
+        setAssistantStatus("No speech detected. Please try again.", "warn");
+        return;
+      }
+      if (speechError === "network") {
+        setAssistantStatus("Speech recognition network issue. Check connection and retry.", "error");
+        return;
+      }
+      if (speechError === "language-not-supported") {
+        setAssistantStatus("This browser does not support speech recognition for the selected language.", "warn");
+        return;
+      }
+      setAssistantStatus("Voice capture failed. Please retry or type manually.", "error");
     };
 
     speechRecognition.onend = () => {

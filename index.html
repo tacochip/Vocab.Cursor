@@ -71,11 +71,19 @@
           <p id="assistant-support-status" class="subtle-text">
             Speak a word and a phrase, then auto-add it with an AI-assisted definition choice.
           </p>
+          <p id="assistant-capability-status" class="subtle-text assistant-capability-status" aria-live="polite"></p>
 
           <label for="assistant-word-input">Word (voice or type)</label>
           <div class="assistant-inline">
             <input id="assistant-word-input" type="text" maxlength="80" placeholder="e.g. meticulous" />
-            <button id="record-word-btn" type="button" class="secondary">Speak Word</button>
+            <button
+              id="record-word-btn"
+              type="button"
+              class="secondary"
+              aria-label="Speak vocabulary word with microphone"
+            >
+              Speak Word
+            </button>
           </div>
 
           <label for="assistant-phrase-input">Phrase using the word</label>
@@ -87,7 +95,14 @@
           ></textarea>
 
           <div class="assistant-actions">
-            <button id="record-phrase-btn" type="button" class="secondary">Speak Phrase</button>
+            <button
+              id="record-phrase-btn"
+              type="button"
+              class="secondary"
+              aria-label="Speak example phrase with microphone"
+            >
+              Speak Phrase
+            </button>
             <button id="assistant-add-btn" type="button">AI Add From Voice</button>
           </div>
           <p id="assistant-status" class="subtle-text assistant-status">
