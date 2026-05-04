@@ -107,6 +107,7 @@ button {
   color: #fff;
   padding: 0.52rem 0.8rem;
   cursor: pointer;
+  transition: background-color 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
 }
 
 button:hover {
@@ -129,6 +130,21 @@ button.danger {
 
 button.danger:hover {
   background: #ffdce1;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+.mode-btn:focus-visible,
+.quiz-option-btn:focus-visible,
+.match-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .mode-switcher {
@@ -162,6 +178,7 @@ button.danger:hover {
   padding: 0.7rem;
   display: grid;
   gap: 0.5rem;
+  background: #fff;
 }
 
 .vocab-item strong {
@@ -203,6 +220,8 @@ button.danger:hover {
   border: 1px dashed var(--border);
   border-radius: 10px;
   padding: 0.8rem;
+  background: #fcfdff;
+  line-height: 1.35;
 }
 
 .assistant-panel {
@@ -251,13 +270,58 @@ button.danger:hover {
   color: var(--success);
 }
 
+.assistant-status.info {
+  color: #2450b2;
+}
+
+.assistant-status.warn {
+  color: #8b5a00;
+}
+
 .lookup-status {
   margin: 0.2rem 0 0;
   min-height: 1.2rem;
 }
 
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  margin-top: 0.15rem;
+  border: 1px solid var(--border);
+  color: var(--subtle);
+  background: #f7f9ff;
+}
+
+.status-badge.ok {
+  color: #0b6a3b;
+  border-color: #b8e9cb;
+  background: #ecfaf2;
+}
+
+.status-badge.warn {
+  color: #8b5a00;
+  border-color: #f1d6a7;
+  background: #fff7eb;
+}
+
+.assistant-capability-status {
+  min-height: 1.1rem;
+}
+
 .lookup-status.error {
   color: var(--danger);
+}
+
+.lookup-status.warn {
+  color: #8b5a00;
+}
+
+.lookup-status.info {
+  color: var(--subtle);
 }
 
 .definition-picker {
